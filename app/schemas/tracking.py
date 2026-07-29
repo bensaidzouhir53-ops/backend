@@ -35,3 +35,5 @@ class PublicTrackingConfigResponse(BaseModel):
     meta_pixel_ids: list[str] = Field(default_factory=list)
     tiktok_pixel_id: Optional[str] = None
     snap_pixel_id: Optional[str] = None
+    # When true, Meta Purchase is sent server-side (CAPI) only — browser must not duplicate it.
+    capi_enabled: bool = False
