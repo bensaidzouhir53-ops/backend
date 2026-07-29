@@ -11,8 +11,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.models.order import Order
 from app.services.order_processing import should_process_order
+from app.services.pricing import (
+    UPSELL_PRICE,
+    calculate_item_price,
+    get_fulfill_quantity,
+    order_has_pending_upsell,
+)
 from app.services.products import PRODUCT_CATALOG
-from app.services.pricing import UPSELL_PRICE, calculate_item_price, get_fulfill_quantity
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -20,6 +25,11 @@ settings = get_settings()
 _BASE_URL = "https://api.cod.network"
 _TIMEOUT = 20.0
 _SYNC_DELAY_SECONDS = 0.35
+_POST_RETRIES = 3
+_POST_RETRY_DELAY_SECONDS = 1.5
+_PERIODIC_SYNC_INTERVAL_SECONDS = 300
+# Wait for upsell accept/decline before pushing base order (countdown is ~10s).
+_UPSELL_GRACE_SECONDS = 120
 
 
 def _format_phone(phone_e164: str | None) -> str:
@@ -210,6 +220,24 @@ def _request_succeeded(result: dict) -> bool:
     return True
 
 
+def _cod_already_succeeded(order: Order) -> bool:
+    if order.cod_network_sent_at is None:
+        return False
+    return _request_succeeded(order.cod_network_response or {})
+
+
+def _order_awaiting_upsell_decision(order: Order) -> bool:
+    """True while customer may still accept/decline upsell — do not push base order yet."""
+    if order.upsell_item is not None:
+        return False
+    if not order_has_pending_upsell(list(order.items or []), order.upsell_item):
+        return False
+    if not order.created_at:
+        return False
+    age_seconds = (datetime.now(tz=timezone.utc) - order.created_at).total_seconds()
+    return age_seconds < _UPSELL_GRACE_SECONDS
+
+
 def _is_items_not_found_error(parsed: dict | list | None) -> bool:
     if not isinstance(parsed, dict):
         return False
@@ -220,6 +248,10 @@ def _is_items_not_found_error(parsed: dict | list | None) -> bool:
 
 def _order_needs_cod_sync(order: Order) -> bool:
     if not should_process_order(order):
+        return False
+    if _cod_already_succeeded(order):
+        return False
+    if _order_awaiting_upsell_decision(order):
         return False
     if order.cod_network_sent_at is None:
         return True
@@ -242,9 +274,34 @@ async def _post_payload(payload: dict, mode: str) -> httpx.Response:
         "Accept": "application/json",
         "Content-Type": "application/json",
     }
+    last_exc: Exception | None = None
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        response = await client.post(url, json=payload, headers=headers)
-        return response
+        for attempt in range(1, _POST_RETRIES + 1):
+            try:
+                response = await client.post(url, json=payload, headers=headers)
+                if response.status_code < 500 or attempt == _POST_RETRIES:
+                    return response
+                logger.warning(
+                    "COD Network HTTP %s (attempt %s/%s) — retrying",
+                    response.status_code,
+                    attempt,
+                    _POST_RETRIES,
+                )
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                last_exc = exc
+                if attempt == _POST_RETRIES:
+                    raise
+                logger.warning(
+                    "COD Network transport error (attempt %s/%s): %s — retrying",
+                    attempt,
+                    _POST_RETRIES,
+                    exc,
+                )
+            if attempt < _POST_RETRIES:
+                await asyncio.sleep(_POST_RETRY_DELAY_SECONDS * attempt)
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("COD Network POST failed without response")
 
 
 async def _persist_cod_result(
@@ -283,6 +340,18 @@ async def send_order_to_cod_network(
     if not should_process_order(order):
         logger.info(
             "COD Network skipped for test order %s (PROCESS_TEST_ORDERS=false)",
+            order.order_number,
+        )
+        return False
+    if _cod_already_succeeded(order):
+        logger.info(
+            "COD Network already sent for order %s — skipping duplicate",
+            order.order_number,
+        )
+        return True
+    if not include_upsell and _order_awaiting_upsell_decision(order):
+        logger.info(
+            "COD Network deferred for order %s — upsell decision pending",
             order.order_number,
         )
         return False
@@ -422,3 +491,27 @@ async def sync_pending_orders_on_startup() -> None:
                 )
     except Exception as exc:
         logger.error("Startup COD Network sync failed: %s", exc)
+
+
+async def sync_pending_orders_periodically() -> None:
+    """Retry failed/missed COD pushes every few minutes (not only on deploy)."""
+    if not settings.ENABLE_COD_NETWORK or not settings.COD_NETWORK_API_TOKEN:
+        return
+
+    from app.database import AsyncSessionLocal
+
+    await asyncio.sleep(60)
+    while True:
+        try:
+            async with AsyncSessionLocal() as db:
+                stats = await sync_pending_orders_to_cod_network(db, include_all=False)
+                if stats["attempted"]:
+                    logger.info(
+                        "Periodic COD Network sync: attempted=%s succeeded=%s failed=%s",
+                        stats["attempted"],
+                        stats["succeeded"],
+                        stats["failed"],
+                    )
+        except Exception as exc:
+            logger.error("Periodic COD Network sync failed: %s", exc)
+        await asyncio.sleep(_PERIODIC_SYNC_INTERVAL_SECONDS)

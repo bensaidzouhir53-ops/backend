@@ -43,6 +43,7 @@ async def lifespan(app: FastAPI):
     )
     asyncio.create_task(sheet_webhook.sync_pending_orders_on_startup())
     asyncio.create_task(cod_network.sync_pending_orders_on_startup())
+    asyncio.create_task(cod_network.sync_pending_orders_periodically())
     yield
     logger.info("Shutting down Nasama Shop API")
 

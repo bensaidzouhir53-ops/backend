@@ -6,6 +6,7 @@ from app.services.cod_network.service import (
     send_upsell_accepted,
     sync_order_to_cod_network,
     sync_pending_orders_on_startup,
+    sync_pending_orders_periodically,
     sync_pending_orders_to_cod_network,
 )
 from app.services.cod_network.status import cod_network_status
@@ -17,5 +18,6 @@ __all__ = [
     "send_upsell_accepted",
     "sync_order_to_cod_network",
     "sync_pending_orders_on_startup",
+    "sync_pending_orders_periodically",
     "sync_pending_orders_to_cod_network",
 ]
