@@ -15,6 +15,7 @@ from app.services.pricing import (
     UPSELL_PRICE,
     calculate_item_price,
     get_fulfill_quantity,
+    order_has_pending_upsell,
 )
 from app.services.products import PRODUCT_CATALOG
 
@@ -27,6 +28,8 @@ _SYNC_DELAY_SECONDS = 0.35
 _POST_RETRIES = 3
 _POST_RETRY_DELAY_SECONDS = 1.5
 _PERIODIC_SYNC_INTERVAL_SECONDS = 300
+# After upsell countdown, sync base order if customer never accepted/declined.
+_UPSELL_GRACE_SECONDS = 120
 
 
 def _format_phone(phone_e164: str | None) -> str:
@@ -224,6 +227,18 @@ def _cod_already_succeeded(order: Order) -> bool:
     return _request_succeeded(order.cod_network_response or {})
 
 
+def _order_awaiting_upsell_decision(order: Order) -> bool:
+    """True while customer may still accept/decline upsell — defer COD until then."""
+    if order.upsell_item is not None:
+        return False
+    if not order_has_pending_upsell(list(order.items or []), order.upsell_item):
+        return False
+    if not order.created_at:
+        return False
+    age_seconds = (datetime.now(tz=timezone.utc) - order.created_at).total_seconds()
+    return age_seconds < _UPSELL_GRACE_SECONDS
+
+
 def _is_items_not_found_error(parsed: dict | list | None) -> bool:
     if not isinstance(parsed, dict):
         return False
@@ -238,6 +253,8 @@ def _order_needs_cod_sync(order: Order) -> bool:
     if not should_process_order(order):
         return False
     if _cod_already_succeeded(order):
+        return False
+    if _order_awaiting_upsell_decision(order):
         return False
     if order.cod_network_sent_at is None:
         return True
@@ -434,13 +451,7 @@ async def send_order_created(db: AsyncSession, order: Order) -> bool:
 
 
 async def send_upsell_accepted(db: AsyncSession, order: Order) -> bool:
-    """COD lead is sent once on order create — do not create a second lead on upsell."""
-    if _cod_already_succeeded(order):
-        logger.info(
-            "COD Network upsell skipped for %s — lead already sent on order create",
-            order.order_number,
-        )
-        return True
+    """Send COD lead with base + upsell SKUs after customer accepts upsell."""
     return await send_order_to_cod_network(db, order, include_upsell=True)
 
 

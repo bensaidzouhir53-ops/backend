@@ -272,13 +272,19 @@ async def _fire_post_order_hooks(order_id: uuid.UUID) -> None:
 
             hook_tasks = [
                 sheet_webhook.send_order_created(db, order),
-                cod_network.send_order_created(db, order),
                 send_order_welcome(order),
             ]
             has_pending_upsell = pricing.order_has_pending_upsell(
                 list(order.items or []),
                 order.upsell_item,
             )
+            if has_pending_upsell:
+                logger.info(
+                    "COD Network deferred for order %s — waiting for upsell decision",
+                    order.order_number,
+                )
+            else:
+                hook_tasks.insert(1, cod_network.send_order_created(db, order))
             if not has_pending_upsell:
                 hook_tasks.append(_fire_capi_and_store(db, order, "Purchase"))
             else:
@@ -294,7 +300,9 @@ async def _fire_post_order_hooks(order_id: uuid.UUID) -> None:
             hook_labels = (
                 ("sheet_webhook", "cod_network", "whatsapp_welcome", "capi")
                 if len(hook_tasks) == 4
-                else ("sheet_webhook", "cod_network", "whatsapp_welcome")
+                else ("sheet_webhook", "whatsapp_welcome", "capi")
+                if len(hook_tasks) == 3
+                else ("sheet_webhook", "whatsapp_welcome")
             )
             for label, result in zip(hook_labels, results, strict=True):
                 if isinstance(result, Exception):
@@ -397,11 +405,12 @@ async def _fire_post_upsell_hooks(order_id: uuid.UUID) -> None:
 
             results = await asyncio.gather(
                 sheet_webhook.send_upsell_accepted(db, order),
+                cod_network.send_upsell_accepted(db, order),
                 _fire_capi_and_store(db, order, "Purchase"),
                 return_exceptions=True,
             )
             for label, result in zip(
-                ("sheet_webhook", "capi"),
+                ("sheet_webhook", "cod_network", "capi"),
                 results,
                 strict=True,
             ):
@@ -455,7 +464,7 @@ async def decline_upsell(
 
 
 async def _fire_post_upsell_decline_hooks(order_id: uuid.UUID) -> None:
-    """Finalize tracking after upsell decline. COD lead was already sent on order create."""
+    """Send base-order COD lead + CAPI after customer declines upsell."""
     from app.database import AsyncSessionLocal
 
     try:
@@ -480,6 +489,12 @@ async def _fire_post_upsell_decline_hooks(order_id: uuid.UUID) -> None:
                 )
                 return
 
+            ok = await cod_network.send_order_created(db, order)
+            if not ok:
+                logger.error(
+                    "COD Network decline sync failed for order %s",
+                    order.order_number,
+                )
             await _fire_capi_and_store(db, order, "Purchase")
     except Exception as exc:
         logger.error("Post-upsell decline hook error for %s: %s", order_id, exc)
