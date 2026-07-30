@@ -217,19 +217,11 @@ def _request_succeeded(result: dict) -> bool:
     return True
 
 
-def _cod_sent_includes_upsell(order: Order) -> bool:
-    resp = order.cod_network_response or {}
-    return bool(resp.get("included_upsell"))
-
-
-def _cod_already_succeeded(order: Order, *, include_upsell: bool = False) -> bool:
+def _cod_already_succeeded(order: Order) -> bool:
+    """True when this order already has a successful COD Network lead."""
     if order.cod_network_sent_at is None:
         return False
-    if not _request_succeeded(order.cod_network_response or {}):
-        return False
-    if include_upsell and order.upsell_item is not None:
-        return _cod_sent_includes_upsell(order)
-    return True
+    return _request_succeeded(order.cod_network_response or {})
 
 
 def _is_items_not_found_error(parsed: dict | list | None) -> bool:
@@ -344,12 +336,6 @@ async def send_order_to_cod_network(
             order.order_number,
         )
         return False
-    if _cod_already_succeeded(order, include_upsell=include_upsell):
-        logger.info(
-            "COD Network already sent for order %s — skipping duplicate",
-            order.order_number,
-        )
-        return True
     if not settings.ENABLE_COD_NETWORK:
         logger.info("COD Network disabled (ENABLE_COD_NETWORK=false)")
         return False
@@ -359,6 +345,23 @@ async def send_order_to_cod_network(
             order.order_number,
         )
         return False
+
+    order_id = order.id
+    # Row lock + fresh read — prevents duplicate POSTs from parallel hooks/sync jobs.
+    locked = await db.execute(
+        select(Order).where(Order.id == order_id).with_for_update()
+    )
+    order = locked.scalar_one_or_none()
+    if not order:
+        logger.error("COD Network: order %s not found after lock", order_id)
+        return False
+
+    if _cod_already_succeeded(order):
+        logger.info(
+            "COD Network already sent for order %s — skipping duplicate",
+            order.order_number,
+        )
+        return True
 
     payload = _build_payload(order, include_upsell=include_upsell)
     if not payload:
@@ -396,7 +399,6 @@ async def send_order_to_cod_network(
             "endpoint": _endpoint_for_mode(settings.COD_NETWORK_MODE),
             "sku_sent": payload.get("sku_1"),
             "skus_sent": [item.get("sku") for item in payload.get("items", [])],
-            "included_upsell": bool(include_upsell and order.upsell_item),
         }
         if resp.status_code >= 400:
             logger.error(
@@ -432,6 +434,13 @@ async def send_order_created(db: AsyncSession, order: Order) -> bool:
 
 
 async def send_upsell_accepted(db: AsyncSession, order: Order) -> bool:
+    """COD lead is sent once on order create — do not create a second lead on upsell."""
+    if _cod_already_succeeded(order):
+        logger.info(
+            "COD Network upsell skipped for %s — lead already sent on order create",
+            order.order_number,
+        )
+        return True
     return await send_order_to_cod_network(db, order, include_upsell=True)
 
 

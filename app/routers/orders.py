@@ -397,12 +397,11 @@ async def _fire_post_upsell_hooks(order_id: uuid.UUID) -> None:
 
             results = await asyncio.gather(
                 sheet_webhook.send_upsell_accepted(db, order),
-                cod_network.send_upsell_accepted(db, order),
                 _fire_capi_and_store(db, order, "Purchase"),
                 return_exceptions=True,
             )
             for label, result in zip(
-                ("sheet_webhook", "cod_network", "capi"),
+                ("sheet_webhook", "capi"),
                 results,
                 strict=True,
             ):
@@ -456,7 +455,7 @@ async def decline_upsell(
 
 
 async def _fire_post_upsell_decline_hooks(order_id: uuid.UUID) -> None:
-    """Send COD for the base order after the customer declines upsell."""
+    """Finalize tracking after upsell decline. COD lead was already sent on order create."""
     from app.database import AsyncSessionLocal
 
     try:
@@ -481,12 +480,6 @@ async def _fire_post_upsell_decline_hooks(order_id: uuid.UUID) -> None:
                 )
                 return
 
-            ok = await cod_network.send_order_created(db, order)
-            if not ok:
-                logger.error(
-                    "COD Network decline sync failed for order %s",
-                    order.order_number,
-                )
             await _fire_capi_and_store(db, order, "Purchase")
     except Exception as exc:
         logger.error("Post-upsell decline hook error for %s: %s", order_id, exc)
