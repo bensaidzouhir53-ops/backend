@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.models.order import Order
-from app.services.order_processing import should_process_order
+from app.services.order_processing import is_test_order, should_process_order
 from app.services.pricing import (
     UPSELL_PRICE,
     calculate_item_price,
@@ -247,6 +247,8 @@ def _is_items_not_found_error(parsed: dict | list | None) -> bool:
 
 
 def _order_needs_cod_sync(order: Order) -> bool:
+    if is_test_order(order):
+        return False
     if not should_process_order(order):
         return False
     if _cod_already_succeeded(order):
@@ -337,6 +339,13 @@ async def send_order_to_cod_network(
     *,
     include_upsell: bool = False,
 ) -> bool:
+    # Test / whitelisted phones must never hit COD Network (real customer orders only).
+    if is_test_order(order):
+        logger.info(
+            "COD Network skipped for test order %s",
+            order.order_number,
+        )
+        return False
     if not should_process_order(order):
         logger.info(
             "COD Network skipped for test order %s (PROCESS_TEST_ORDERS=false)",
