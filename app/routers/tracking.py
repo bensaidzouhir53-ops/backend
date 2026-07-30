@@ -61,7 +61,7 @@ async def get_tracking_config() -> PublicTrackingConfigResponse:
             if is_real_secret(settings.SNAP_PIXEL_ID)
             else None
         ),
-        capi_enabled=settings.ENABLE_CAPI,
+        capi_enabled=settings.ENABLE_CAPI and len(settings.meta_pixel_token_pairs) > 0,
     )
 
 
