@@ -15,7 +15,6 @@ from app.services.pricing import (
     UPSELL_PRICE,
     calculate_item_price,
     get_fulfill_quantity,
-    order_has_pending_upsell,
 )
 from app.services.products import PRODUCT_CATALOG
 
@@ -28,8 +27,6 @@ _SYNC_DELAY_SECONDS = 0.35
 _POST_RETRIES = 3
 _POST_RETRY_DELAY_SECONDS = 1.5
 _PERIODIC_SYNC_INTERVAL_SECONDS = 300
-# Wait for upsell accept/decline before pushing base order (countdown is ~10s).
-_UPSELL_GRACE_SECONDS = 120
 
 
 def _format_phone(phone_e164: str | None) -> str:
@@ -220,22 +217,19 @@ def _request_succeeded(result: dict) -> bool:
     return True
 
 
-def _cod_already_succeeded(order: Order) -> bool:
+def _cod_sent_includes_upsell(order: Order) -> bool:
+    resp = order.cod_network_response or {}
+    return bool(resp.get("included_upsell"))
+
+
+def _cod_already_succeeded(order: Order, *, include_upsell: bool = False) -> bool:
     if order.cod_network_sent_at is None:
         return False
-    return _request_succeeded(order.cod_network_response or {})
-
-
-def _order_awaiting_upsell_decision(order: Order) -> bool:
-    """True while customer may still accept/decline upsell — do not push base order yet."""
-    if order.upsell_item is not None:
+    if not _request_succeeded(order.cod_network_response or {}):
         return False
-    if not order_has_pending_upsell(list(order.items or []), order.upsell_item):
-        return False
-    if not order.created_at:
-        return False
-    age_seconds = (datetime.now(tz=timezone.utc) - order.created_at).total_seconds()
-    return age_seconds < _UPSELL_GRACE_SECONDS
+    if include_upsell and order.upsell_item is not None:
+        return _cod_sent_includes_upsell(order)
+    return True
 
 
 def _is_items_not_found_error(parsed: dict | list | None) -> bool:
@@ -252,8 +246,6 @@ def _order_needs_cod_sync(order: Order) -> bool:
     if not should_process_order(order):
         return False
     if _cod_already_succeeded(order):
-        return False
-    if _order_awaiting_upsell_decision(order):
         return False
     if order.cod_network_sent_at is None:
         return True
@@ -352,18 +344,12 @@ async def send_order_to_cod_network(
             order.order_number,
         )
         return False
-    if _cod_already_succeeded(order):
+    if _cod_already_succeeded(order, include_upsell=include_upsell):
         logger.info(
             "COD Network already sent for order %s — skipping duplicate",
             order.order_number,
         )
         return True
-    if not include_upsell and _order_awaiting_upsell_decision(order):
-        logger.info(
-            "COD Network deferred for order %s — upsell decision pending",
-            order.order_number,
-        )
-        return False
     if not settings.ENABLE_COD_NETWORK:
         logger.info("COD Network disabled (ENABLE_COD_NETWORK=false)")
         return False
@@ -410,6 +396,7 @@ async def send_order_to_cod_network(
             "endpoint": _endpoint_for_mode(settings.COD_NETWORK_MODE),
             "sku_sent": payload.get("sku_1"),
             "skus_sent": [item.get("sku") for item in payload.get("items", [])],
+            "included_upsell": bool(include_upsell and order.upsell_item),
         }
         if resp.status_code >= 400:
             logger.error(

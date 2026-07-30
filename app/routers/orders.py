@@ -272,6 +272,7 @@ async def _fire_post_order_hooks(order_id: uuid.UUID) -> None:
 
             hook_tasks = [
                 sheet_webhook.send_order_created(db, order),
+                cod_network.send_order_created(db, order),
                 send_order_welcome(order),
             ]
             has_pending_upsell = pricing.order_has_pending_upsell(
@@ -279,7 +280,6 @@ async def _fire_post_order_hooks(order_id: uuid.UUID) -> None:
                 order.upsell_item,
             )
             if not has_pending_upsell:
-                hook_tasks.insert(1, cod_network.send_order_created(db, order))
                 hook_tasks.append(_fire_capi_and_store(db, order, "Purchase"))
             else:
                 logger.info(
@@ -294,9 +294,7 @@ async def _fire_post_order_hooks(order_id: uuid.UUID) -> None:
             hook_labels = (
                 ("sheet_webhook", "cod_network", "whatsapp_welcome", "capi")
                 if len(hook_tasks) == 4
-                else ("sheet_webhook", "whatsapp_welcome")
-                if has_pending_upsell
-                else ("sheet_webhook", "cod_network", "whatsapp_welcome", "capi")
+                else ("sheet_webhook", "cod_network", "whatsapp_welcome")
             )
             for label, result in zip(hook_labels, results, strict=True):
                 if isinstance(result, Exception):
