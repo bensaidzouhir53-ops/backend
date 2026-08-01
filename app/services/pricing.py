@@ -4,8 +4,8 @@ from app.services.products import PRODUCT_NAMES_AR
 
 PRODUCT_QUANTITY_PRICES: dict[str, dict[int, float]] = {
     "herbal-lung-spray": {1: 179.0, 2: 249.0, 3: 319.0},
-    "molien-drops": {1: 179.0, 2: 249.0, 3: 349.0},
-    "molien-drops-women": {1: 179.0, 2: 249.0, 3: 349.0},
+    "molien-drops": {1: 189.0, 2: 265.0, 3: 365.0},
+    "molien-drops-women": {1: 189.0, 2: 265.0, 3: 365.0},
 }
 
 # Optional tier → physical units override (empty = ship tier quantity as-is)
