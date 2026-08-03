@@ -44,16 +44,7 @@ def calculate_subtotal(items: list[OrderItem]) -> float:
 
 
 def get_upsell_offer(items: list[OrderItem]) -> Optional[UpsellOffer]:
-    ordered = {item.product_slug for item in items}
-    for slug in ordered:
-        upsell_slug = UPSELL_CROSS_SELL.get(slug)
-        if upsell_slug and upsell_slug not in ordered:
-            return UpsellOffer(
-                product_slug=upsell_slug,
-                name_ar=PRODUCT_NAMES_AR[upsell_slug],
-                price=UPSELL_PRICE,
-                offer_text=UPSELL_OFFER_TEXT,
-            )
+    """Upsell disabled — always returns None."""
     return None
 
 

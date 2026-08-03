@@ -12,10 +12,8 @@ from app.config import get_settings
 from app.models.order import Order
 from app.services.order_processing import is_test_order, should_process_order
 from app.services.pricing import (
-    UPSELL_PRICE,
     calculate_item_price,
     get_fulfill_quantity,
-    order_has_pending_upsell,
 )
 from app.services.products import PRODUCT_CATALOG
 
@@ -28,8 +26,6 @@ _SYNC_DELAY_SECONDS = 0.35
 _POST_RETRIES = 3
 _POST_RETRY_DELAY_SECONDS = 1.5
 _PERIODIC_SYNC_INTERVAL_SECONDS = 300
-# After upsell countdown, sync base order if customer never accepted/declined.
-_UPSELL_GRACE_SECONDS = 120
 
 
 def _format_phone(phone_e164: str | None) -> str:
@@ -228,15 +224,8 @@ def _cod_already_succeeded(order: Order) -> bool:
 
 
 def _order_awaiting_upsell_decision(order: Order) -> bool:
-    """True while customer may still accept/decline upsell — defer COD until then."""
-    if order.upsell_item is not None:
-        return False
-    if not order_has_pending_upsell(list(order.items or []), order.upsell_item):
-        return False
-    if not order.created_at:
-        return False
-    age_seconds = (datetime.now(tz=timezone.utc) - order.created_at).total_seconds()
-    return age_seconds < _UPSELL_GRACE_SECONDS
+    """Upsell disabled — never defer COD."""
+    return False
 
 
 def _is_items_not_found_error(parsed: dict | list | None) -> bool:

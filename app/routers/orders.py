@@ -272,38 +272,16 @@ async def _fire_post_order_hooks(order_id: uuid.UUID) -> None:
 
             hook_tasks = [
                 sheet_webhook.send_order_created(db, order),
+                cod_network.send_order_created(db, order),
                 send_order_welcome(order),
+                _fire_capi_and_store(db, order, "Purchase"),
             ]
-            has_pending_upsell = pricing.order_has_pending_upsell(
-                list(order.items or []),
-                order.upsell_item,
-            )
-            if has_pending_upsell:
-                logger.info(
-                    "COD Network deferred for order %s — waiting for upsell decision",
-                    order.order_number,
-                )
-            else:
-                hook_tasks.insert(1, cod_network.send_order_created(db, order))
-            if not has_pending_upsell:
-                hook_tasks.append(_fire_capi_and_store(db, order, "Purchase"))
-            else:
-                logger.info(
-                    "CAPI deferred for order %s — upsell pending",
-                    order.order_number,
-                )
 
             results = await asyncio.gather(
                 *hook_tasks,
                 return_exceptions=True,
             )
-            hook_labels = (
-                ("sheet_webhook", "cod_network", "whatsapp_welcome", "capi")
-                if len(hook_tasks) == 4
-                else ("sheet_webhook", "whatsapp_welcome", "capi")
-                if len(hook_tasks) == 3
-                else ("sheet_webhook", "whatsapp_welcome")
-            )
+            hook_labels = ("sheet_webhook", "cod_network", "whatsapp_welcome", "capi")
             for label, result in zip(hook_labels, results, strict=True):
                 if isinstance(result, Exception):
                     logger.error(
