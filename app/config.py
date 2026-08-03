@@ -99,18 +99,9 @@ class Settings(BaseSettings):
         if not self.META_ACCESS_TOKEN:
             self.META_ACCESS_TOKEN = self.META_API_TOKEN or self.FACEBOOK_ACCESS_TOKEN
 
-        # TIKTOK_PIXEL_ID wins when set — unless it is a stale ID and CODE has the new pixel.
-        saved_code = self.TIKTOK_PIXEL_CODE
+        # TIKTOK_PIXEL_ID is an alias for TIKTOK_PIXEL_CODE
         if self.TIKTOK_PIXEL_ID:
             self.TIKTOK_PIXEL_CODE = self.TIKTOK_PIXEL_ID
-
-        stale_tiktok = {"D6FOFO3C77U2V3Q5MST0"}
-        current = self.TIKTOK_PIXEL_CODE
-        if current in stale_tiktok:
-            if saved_code and saved_code not in stale_tiktok:
-                self.TIKTOK_PIXEL_CODE = saved_code
-            else:
-                self.TIKTOK_PIXEL_CODE = None
 
         return self
 
