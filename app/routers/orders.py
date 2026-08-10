@@ -85,6 +85,21 @@ async def _fire_capi_and_store(
         )
         return
 
+    if order.event_id:
+        existing_event = await db.execute(
+            select(TrackingEvent).where(
+                TrackingEvent.event_id == order.event_id,
+                TrackingEvent.event_name == event_name,
+            )
+        )
+        if existing_event.scalar_one_or_none():
+            logger.info(
+                "CAPI %s already fired for event_id %s — skipping duplicate",
+                event_name,
+                order.event_id,
+            )
+            return
+
     status = provider_status(settings)
     logger.info(
         "CAPI dispatch for order %s — meta=%s tiktok=%s snap=%s force=%s",
@@ -486,6 +501,5 @@ async def _fire_post_upsell_decline_hooks(order_id: uuid.UUID) -> None:
                     "COD Network decline sync failed for order %s",
                     order.order_number,
                 )
-            await _fire_capi_and_store(db, order, "Purchase")
     except Exception as exc:
         logger.error("Post-upsell decline hook error for %s: %s", order_id, exc)
