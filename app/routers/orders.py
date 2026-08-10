@@ -27,6 +27,7 @@ from app.services import (
 from app.services.whatsapp_welcome import send_order_welcome
 from app.services.order_processing import should_process_order
 from app.services.phone_whitelist import is_whitelisted_phone
+from app.services.phone_blacklist import is_blacklisted_phone
 from app.services.capi import meta as meta_capi
 from app.services.capi import tiktok as tiktok_capi
 from app.services.capi import snapchat as snap_capi
@@ -181,6 +182,18 @@ async def create_order(
 
     # Server-side phone validation & normalisation
     phone_e164, phone_national = phone_validator.validate_saudi_phone(body.phone)
+
+    if is_blacklisted_phone(body.phone) or is_blacklisted_phone(phone_e164):
+        logger.warning(
+            "Blocked order attempt from blacklisted phone (national=%s)",
+            phone_national,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "message": "تعذر إتمام الطلب من هذا الرقم. يرجى التواصل مع خدمة العملاء.",
+            },
+        )
 
     client_ip = _get_client_ip(request, body.client_ip)
 

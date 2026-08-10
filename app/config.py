@@ -127,6 +127,8 @@ class Settings(BaseSettings):
     VPN_CHECK_API_KEY_HEADER: str = "Authorization"
     # Comma-separated test phones that bypass GeoIP in production
     ORDER_PHONE_WHITELIST: str = "055000000,0550000000"
+    # Comma-separated phones blocked from checkout and fulfillment (COD, sheet, WhatsApp)
+    ORDER_PHONE_BLACKLIST: str = "966559624881,0559624881"
     # When false, whitelisted test orders are saved but not sent to sheet/COD/CAPI
     PROCESS_TEST_ORDERS: bool = False
 
