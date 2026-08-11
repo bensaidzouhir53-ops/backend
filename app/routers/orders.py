@@ -75,6 +75,7 @@ async def _fire_capi_and_store(
         select(TrackingEvent).where(
             TrackingEvent.order_id == order.id,
             TrackingEvent.event_name == event_name,
+            TrackingEvent.provider_results.isnot(None),
         )
     )
     if existing.scalar_one_or_none():
@@ -84,21 +85,6 @@ async def _fire_capi_and_store(
             order.order_number,
         )
         return
-
-    if order.event_id:
-        existing_event = await db.execute(
-            select(TrackingEvent).where(
-                TrackingEvent.event_id == order.event_id,
-                TrackingEvent.event_name == event_name,
-            )
-        )
-        if existing_event.scalar_one_or_none():
-            logger.info(
-                "CAPI %s already fired for event_id %s — skipping duplicate",
-                event_name,
-                order.event_id,
-            )
-            return
 
     status = provider_status(settings)
     logger.info(
