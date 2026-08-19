@@ -71,6 +71,22 @@ async def _fire_capi_and_store(
         logger.info("CAPI disabled (ENABLE_CAPI=false) — skipping order %s", order.order_number)
         return
 
+    if order.event_id:
+        existing_event = await db.execute(
+            select(TrackingEvent).where(
+                TrackingEvent.event_id == order.event_id,
+                TrackingEvent.event_name == event_name,
+                TrackingEvent.provider_results.isnot(None),
+            )
+        )
+        if existing_event.scalar_one_or_none():
+            logger.info(
+                "CAPI %s already fired for event_id %s — skipping duplicate",
+                event_name,
+                order.event_id,
+            )
+            return
+
     existing = await db.execute(
         select(TrackingEvent).where(
             TrackingEvent.order_id == order.id,
@@ -138,6 +154,14 @@ async def _fire_capi_and_store(
 async def _fire_capi_only(order_id: uuid.UUID) -> None:
     """Fire Meta/TikTok/Snap CAPI for test orders (no COD/sheet/WhatsApp). Never raises."""
     from app.database import AsyncSessionLocal
+
+    settings = get_settings()
+    if settings.APP_ENV == "production" and not settings.META_TEST_EVENT_CODE:
+        logger.info(
+            "CAPI-only hook skipped for test order_id=%s in production (no META_TEST_EVENT_CODE)",
+            order_id,
+        )
+        return
 
     logger.info("CAPI-only hook started for test order_id=%s", order_id)
     try:
