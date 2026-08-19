@@ -106,6 +106,13 @@ async def fire_meta_test_event(request: Request) -> dict:
     if isinstance(test_code, str):
         test_code = test_code.strip() or None
 
+    if settings.APP_ENV == "production" and not test_code:
+        return {
+            "ok": False,
+            "error": "Blocked in production — set META_TEST_EVENT_CODE or pass test_event_code",
+            "status": provider_status(settings),
+        }
+
     pixel_id, token = pairs[0]
     phone_hash = hashlib.sha256(b"966500000000").hexdigest()
     event = {
