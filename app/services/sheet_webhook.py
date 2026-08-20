@@ -175,6 +175,22 @@ async def send_order_created(db: AsyncSession, order: Order) -> bool:
         )
         return False
 
+    order_id = order.id
+    locked = await db.execute(
+        select(Order).where(Order.id == order_id).with_for_update()
+    )
+    order = locked.scalar_one_or_none()
+    if not order:
+        logger.error("Sheet webhook: order %s not found after lock", order_id)
+        return False
+
+    if order.sheet_sent_at is not None and _webhook_succeeded(order.sheet_response or {}):
+        logger.info(
+            "Sheet webhook already sent for order %s — skipping duplicate",
+            order.order_number,
+        )
+        return True
+
     payload = {
         "event": "order_created",
         "send_cod": _sheet_send_cod_flag()

@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy import select
@@ -35,6 +35,55 @@ from app.services.capi.status import provider_status
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["orders"])
+
+DUPLICATE_ORDER_WINDOW_MINUTES = 3
+
+
+def _items_fingerprint(items: list[dict]) -> tuple[tuple[str, int], ...]:
+    return tuple(
+        sorted(
+            (str(item.get("product_slug", "")), int(item.get("quantity", 1)))
+            for item in items
+        )
+    )
+
+
+def _order_response_for(order: Order, items: list) -> CreateOrderResponse:
+    upsell_offer = pricing.get_upsell_offer(items)
+    return CreateOrderResponse(
+        order_id=order.id,
+        order_number=order.order_number,
+        subtotal=float(order.subtotal),
+        total=float(order.total),
+        currency=order.currency,
+        upsell=upsell_offer,
+    )
+
+
+async def _find_recent_duplicate_order(
+    db: AsyncSession,
+    phone_e164: str,
+    items_json: list[dict],
+) -> Order | None:
+    """Block accidental double-submit: same phone + cart within a few minutes."""
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(
+        minutes=DUPLICATE_ORDER_WINDOW_MINUTES
+    )
+    fingerprint = _items_fingerprint(items_json)
+    result = await db.execute(
+        select(Order)
+        .where(
+            Order.phone_e164 == phone_e164,
+            Order.created_at >= cutoff,
+            Order.status.in_(["pending", "confirmed", "test"]),
+        )
+        .order_by(Order.created_at.desc())
+        .limit(8)
+    )
+    for order in result.scalars():
+        if _items_fingerprint(list(order.items or [])) == fingerprint:
+            return order
+    return None
 
 
 def _get_client_ip(request: Request, override: str | None) -> str | None:
@@ -195,15 +244,7 @@ async def create_order(
                 body.event_id,
                 existing_order.order_number,
             )
-            upsell_offer = pricing.get_upsell_offer(body.items)
-            return CreateOrderResponse(
-                order_id=existing_order.id,
-                order_number=existing_order.order_number,
-                subtotal=float(existing_order.subtotal),
-                total=float(existing_order.total),
-                currency=existing_order.currency,
-                upsell=upsell_offer,
-            )
+            return _order_response_for(existing_order, body.items)
 
     # Server-side phone validation & normalisation
     phone_e164, phone_national = phone_validator.validate_saudi_phone(body.phone)
@@ -222,6 +263,17 @@ async def create_order(
 
     client_ip = _get_client_ip(request, body.client_ip)
 
+    items_json = [item.model_dump() for item in body.items]
+
+    duplicate = await _find_recent_duplicate_order(db, phone_e164, items_json)
+    if duplicate:
+        logger.info(
+            "Duplicate checkout blocked for %s — returning existing order %s",
+            phone_national,
+            duplicate.order_number,
+        )
+        return _order_response_for(duplicate, body.items)
+
     # Server-side price calculation
     subtotal = pricing.calculate_subtotal(body.items)
     total = subtotal
@@ -230,8 +282,6 @@ async def create_order(
     order_number = await order_number_svc.generate_order_number(db)
 
     user_agent = body.user_agent or request.headers.get("User-Agent")
-
-    items_json = [item.model_dump() for item in body.items]
 
     is_test = is_whitelisted_phone(body.phone) and not get_settings().PROCESS_TEST_ORDERS
 
@@ -466,6 +516,16 @@ async def decline_upsell(
             "total": float(order.total),
             "currency": order.currency,
             "cod_sent": order.cod_network_sent_at is not None,
+        }
+
+    # Idempotent: COD already synced on order create — do not queue again.
+    if order.cod_network_sent_at is not None:
+        return {
+            "order_id": str(order.id),
+            "order_number": order.order_number,
+            "total": float(order.total),
+            "currency": order.currency,
+            "cod_sent": True,
         }
 
     background_tasks.add_task(_fire_post_upsell_decline_hooks, order.id)
