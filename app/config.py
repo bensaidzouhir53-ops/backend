@@ -7,6 +7,9 @@ from typing import Optional
 
 from app.database_url import normalize_database_url
 
+# Single Meta pixel for browser + CAPI (AddToCart, InitiateCheckout, Purchase in Ads Manager).
+CANONICAL_META_PIXEL_ID = "576636091443534"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -255,28 +258,24 @@ class Settings(BaseSettings):
 
     @property
     def meta_pixel_ids(self) -> list[str]:
-        """Meta browser pixel ID (single pixel)."""
-        if not self.META_PIXEL_ID:
+        """Meta browser pixel ID — always the canonical pixel when CAPI/token is configured."""
+        if not self.META_ACCESS_TOKEN:
+            env_id = (self.META_PIXEL_ID or "").strip()
+            if env_id:
+                return [CANONICAL_META_PIXEL_ID]
             return []
-        cleaned = self.META_PIXEL_ID.strip()
-        return [cleaned] if cleaned else []
+        return [CANONICAL_META_PIXEL_ID]
 
     @property
     def meta_pixel_token_pairs(self) -> list[tuple[str, str]]:
-        """Meta pixel/token pair for CAPI (single pixel)."""
+        """Meta pixel/token pair for CAPI (single canonical pixel)."""
         from app.services.capi.status import is_real_secret
 
-        if not self.META_PIXEL_ID or not self.META_ACCESS_TOKEN:
+        if not self.META_ACCESS_TOKEN:
             return []
-        pid_clean = self.META_PIXEL_ID.strip()
         token_clean = self.META_ACCESS_TOKEN.strip()
-        if (
-            pid_clean
-            and token_clean
-            and is_real_secret(pid_clean)
-            and is_real_secret(token_clean)
-        ):
-            return [(pid_clean, token_clean)]
+        if token_clean and is_real_secret(token_clean):
+            return [(CANONICAL_META_PIXEL_ID, token_clean)]
         return []
 
     @property
