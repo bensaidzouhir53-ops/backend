@@ -2,7 +2,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -13,8 +13,14 @@ from app.schemas.tracking import (
     TrackingEventRequest,
     TrackingEventResponse,
 )
+from app.services.capi import meta as meta_capi
 from app.services.capi.status import is_real_secret, provider_status
 from app.services.cod_network.status import cod_network_status
+
+# Forwarded to Meta CAPI as a server-side backup to the browser pixel (ad blockers,
+# Safari ITP, etc. can drop the client-side fbq call). Purchase already has its own
+# dedicated CAPI path in orders.py once an order exists.
+_CAPI_FORWARDED_EVENTS = frozenset({"AddToCart", "InitiateCheckout"})
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["tracking"])
@@ -177,6 +183,33 @@ async def get_cod_network_status() -> dict:
     return cod_network_status(settings)
 
 
+async def _forward_event_to_meta_capi(
+    event_name: str,
+    body: TrackingEventRequest,
+    client_ip: str | None,
+) -> None:
+    """Fire-and-forget: send AddToCart/InitiateCheckout to Meta CAPI. Never raises."""
+    try:
+        cookies = body.cookies or {}
+        click_ids = body.click_ids or {}
+        result = await meta_capi.fire_browser_event(
+            event_name,
+            event_id=body.event_id,
+            value=body.value,
+            currency=body.currency,
+            content_ids=body.content_ids,
+            event_source_url=body.page_url,
+            fbp=cookies.get("fbp") or cookies.get("_fbp"),
+            fbc=cookies.get("fbc") or cookies.get("_fbc"),
+            fbclid=click_ids.get("fbclid"),
+            client_ip=client_ip,
+            user_agent=body.user_agent,
+        )
+        logger.info("Meta CAPI %s forwarded: %s", event_name, result)
+    except Exception as exc:
+        logger.error("Meta CAPI %s forward failed: %s", event_name, exc)
+
+
 @router.post(
     "/tracking/events",
     response_model=TrackingEventResponse,
@@ -185,19 +218,23 @@ async def get_cod_network_status() -> dict:
 async def capture_tracking_event(
     body: TrackingEventRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ) -> TrackingEventResponse:
     """
-    Store first-party storefront analytics for the admin dashboard.
+    Store first-party storefront analytics for the admin dashboard, and forward
+    AddToCart/InitiateCheckout to Meta CAPI as a server-side backup to the browser
+    pixel (Purchase is handled separately in orders.py once an order exists).
 
     GeoIP is not enforced here so funnel metrics (clicks, add-to-cart, checkout)
     reflect real visitor activity. KSA enforcement remains on POST /api/orders only.
     """
     client_ip = _get_client_ip(request, body.client_ip)
+    event_name = body.event_name.strip()
 
     event = TrackingEvent(
         id=uuid.uuid4(),
-        event_name=body.event_name.strip(),
+        event_name=event_name,
         event_id=body.event_id,
         payload={
             "visitor_id": body.visitor_id,
@@ -218,5 +255,11 @@ async def capture_tracking_event(
     )
     db.add(event)
     await db.commit()
+
+    settings = get_settings()
+    if settings.ENABLE_CAPI and event_name in _CAPI_FORWARDED_EVENTS:
+        background_tasks.add_task(
+            _forward_event_to_meta_capi, event_name, body, client_ip
+        )
 
     return TrackingEventResponse(stored=True)

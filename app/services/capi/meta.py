@@ -40,7 +40,7 @@ def _format_fbc(cookie_fbc: str | None, fbclid: str | None) -> str | None:
 
 
 async def _fire_to_pixel(
-    order: Order,
+    label: str,
     pixel_id: str,
     access_token: str,
     event: dict,
@@ -68,24 +68,24 @@ async def _fire_to_pixel(
                         pixel_id[:6],
                     )
                 logger.error(
-                    "Meta CAPI failed for order %s pixel %s (status=%s): %s",
-                    order.order_number,
+                    "Meta CAPI failed for %s pixel %s (status=%s): %s",
+                    label,
                     pixel_id[:6],
                     resp.status_code,
                     data,
                 )
             else:
                 logger.info(
-                    "Meta CAPI OK for order %s pixel %s: %s",
-                    order.order_number,
+                    "Meta CAPI OK for %s pixel %s: %s",
+                    label,
                     pixel_id[:6],
                     data,
                 )
             return {"pixel_id": pixel_id, "status_code": resp.status_code, "response": data}
     except Exception as exc:
         logger.error(
-            "Meta CAPI error for order %s pixel %s: %s",
-            order.order_number,
+            "Meta CAPI error for %s pixel %s: %s",
+            label,
             pixel_id[:6],
             exc,
         )
@@ -157,7 +157,91 @@ async def fire_purchase_event(order: Order) -> dict:
 
     results = await asyncio.gather(
         *[
-            _fire_to_pixel(order, pixel_id, token, event, settings.META_TEST_EVENT_CODE)
+            _fire_to_pixel(
+                f"order {order.order_number}",
+                pixel_id,
+                token,
+                event,
+                settings.META_TEST_EVENT_CODE,
+            )
+            for pixel_id, token in pixel_token_pairs
+        ]
+    )
+
+    return {"pixels_fired": len(results), "results": results}
+
+
+async def fire_browser_event(
+    event_name: str,
+    *,
+    event_id: str | None,
+    value: float | None,
+    currency: str,
+    content_ids: list[str],
+    event_source_url: str | None,
+    fbp: str | None,
+    fbc: str | None,
+    fbclid: str | None = None,
+    client_ip: str | None,
+    user_agent: str | None,
+) -> dict:
+    """
+    Send a top-of-funnel event (AddToCart, InitiateCheckout, ...) to Meta CAPI.
+
+    No PII is available yet at this stage, so identity relies on fbp/fbc (Meta's own
+    click/browser cookies) plus client IP + user agent — the same signal Meta's browser
+    pixel already relies on. Share the same event_id used by the browser fbq call so
+    Meta dedupes the two into a single event in Ads Manager.
+    """
+    settings = get_settings()
+    if not settings.ENABLE_CAPI:
+        return {"skipped": "capi disabled"}
+
+    pixel_token_pairs = settings.meta_pixel_token_pairs
+    if not pixel_token_pairs:
+        return {"skipped": "not configured"}
+
+    fbc_formatted = _format_fbc(fbc, fbclid)
+    if not client_ip and not fbp and not fbc_formatted:
+        # Meta rejects events with no way to match a person/browser (error 2804050).
+        return {"skipped": "no identifiers"}
+
+    user_data: dict = {
+        "client_user_agent": user_agent or "Mozilla/5.0 (compatible; NafaasCAPI/1.0)",
+    }
+    if client_ip:
+        user_data["client_ip_address"] = client_ip
+    if fbp:
+        user_data["fbp"] = fbp
+    if fbc_formatted:
+        user_data["fbc"] = fbc_formatted
+
+    event: dict = {
+        "event_name": event_name,
+        "event_id": event_id or str(uuid.uuid4()),
+        "event_time": int(time.time()),
+        "action_source": "website",
+        "event_source_url": event_source_url or settings.FRONTEND_URL,
+        "user_data": user_data,
+        "custom_data": {
+            "value": value,
+            "currency": currency or "SAR",
+            "content_ids": content_ids or [],
+            "content_type": "product",
+        },
+    }
+
+    import asyncio
+
+    results = await asyncio.gather(
+        *[
+            _fire_to_pixel(
+                f"{event_name}:{event_id}",
+                pixel_id,
+                token,
+                event,
+                settings.META_TEST_EVENT_CODE,
+            )
             for pixel_id, token in pixel_token_pairs
         ]
     )
