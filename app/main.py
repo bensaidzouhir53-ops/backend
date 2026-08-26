@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.database_migrations import ensure_order_schema
 from app.routers import admin, health, orders, redirectmonster, tracking
-from app.services import cod_network, sheet_webhook
+from app.services import sheet_webhook
 from app.services.capi.status import provider_status
 from app.services.cod_network.status import cod_network_status
 
@@ -42,8 +42,14 @@ async def lifespan(app: FastAPI):
         cod["token_set"],
     )
     asyncio.create_task(sheet_webhook.sync_pending_orders_on_startup())
-    asyncio.create_task(cod_network.sync_pending_orders_on_startup())
-    asyncio.create_task(cod_network.sync_pending_orders_periodically())
+    # COD Network auto-resync intentionally disabled: an order is pushed once,
+    # right when it's created (see orders.py _fire_post_order_hooks). Blindly
+    # re-scanning and re-POSTing every order missing cod_network_sent_at on
+    # every restart + every 5 minutes caused duplicate leads whenever a send
+    # looked ambiguous to us (timeout, restart mid-request) but had actually
+    # reached COD Network. Use the admin dashboard "resync" button, or
+    # `python scripts/sync_cod_orders.py`, to retry a specific order by hand
+    # after confirming with COD Network it wasn't already received.
     yield
     logger.info("Shutting down Nasama Shop API")
 
