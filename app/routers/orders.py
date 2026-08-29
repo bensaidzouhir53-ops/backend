@@ -106,8 +106,18 @@ async def _fire_capi_and_store(
     event_name: str = "Purchase",
     *,
     force: bool = False,
+    test_mode: bool = False,
 ) -> None:
-    """Fire all CAPI integrations concurrently; store a single TrackingEvent row."""
+    """
+    Fire CAPI integrations concurrently; store a single TrackingEvent row.
+
+    test_mode=True (whitelisted/test-phone orders only) fires Meta alone — Meta
+    has test_event_code isolation via Events Manager's Test Events tab, so it
+    never touches real Ads Manager numbers. TikTok/Snapchat have no equivalent
+    test channel here, so firing them for a test order would create a real,
+    unflagged Purchase in their live ad account data for something that was
+    never an actual customer purchase.
+    """
     settings = get_settings()
 
     if not force and not should_process_order(order):
@@ -153,19 +163,13 @@ async def _fire_capi_and_store(
 
     status = provider_status(settings)
     logger.info(
-        "CAPI dispatch for order %s — meta=%s tiktok=%s snap=%s force=%s",
+        "CAPI dispatch for order %s — meta=%s tiktok=%s snap=%s force=%s test_mode=%s",
         order.order_number,
         status["meta"]["ready"],
         status["tiktok"]["ready"],
         status["snapchat"]["ready"],
         force,
-    )
-
-    meta_result, tiktok_result, snap_result = await asyncio.gather(
-        meta_capi.fire_purchase_event(order),
-        tiktok_capi.fire_purchase_event(order),
-        snap_capi.fire_purchase_event(order),
-        return_exceptions=True,
+        test_mode,
     )
 
     def _safe(r):
@@ -173,11 +177,28 @@ async def _fire_capi_and_store(
             return {"error": str(r)}
         return r
 
-    provider_results = {
-        "meta": _safe(meta_result),
-        "tiktok": _safe(tiktok_result),
-        "snapchat": _safe(snap_result),
-    }
+    if test_mode:
+        (meta_result,) = await asyncio.gather(
+            meta_capi.fire_purchase_event(order),
+            return_exceptions=True,
+        )
+        provider_results = {
+            "meta": _safe(meta_result),
+            "tiktok": {"skipped": "test order — no TikTok test-event isolation"},
+            "snapchat": {"skipped": "test order — no Snapchat test-event isolation"},
+        }
+    else:
+        meta_result, tiktok_result, snap_result = await asyncio.gather(
+            meta_capi.fire_purchase_event(order),
+            tiktok_capi.fire_purchase_event(order),
+            snap_capi.fire_purchase_event(order),
+            return_exceptions=True,
+        )
+        provider_results = {
+            "meta": _safe(meta_result),
+            "tiktok": _safe(tiktok_result),
+            "snapchat": _safe(snap_result),
+        }
 
     tracking_event = TrackingEvent(
         id=uuid.uuid4(),
@@ -201,7 +222,7 @@ async def _fire_capi_and_store(
 
 
 async def _fire_capi_only(order_id: uuid.UUID) -> None:
-    """Fire Meta/TikTok/Snap CAPI for test orders (no COD/sheet/WhatsApp). Never raises."""
+    """Fire Meta-only CAPI for test orders (no COD/sheet/WhatsApp). Never raises."""
     from app.database import AsyncSessionLocal
 
     settings = get_settings()
@@ -220,7 +241,7 @@ async def _fire_capi_only(order_id: uuid.UUID) -> None:
             if not order:
                 logger.error("CAPI-only hook: order %s not found", order_id)
                 return
-            await _fire_capi_and_store(db, order, "Purchase", force=True)
+            await _fire_capi_and_store(db, order, "Purchase", force=True, test_mode=True)
     except Exception as exc:
         logger.error("CAPI-only hook error for %s: %s", order_id, exc)
 
