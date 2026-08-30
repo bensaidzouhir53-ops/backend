@@ -203,8 +203,11 @@ async def fire_browser_event(
 
     fbc_formatted = _format_fbc(fbc, fbclid)
     if not client_ip and not fbp and not fbc_formatted:
-        # Meta rejects events with no way to match a person/browser (error 2804050).
-        return {"skipped": "no identifiers"}
+        # Still attempt CAPI — Meta may match via IP + UA alone for funnel events.
+        logger.warning(
+            "Meta CAPI %s: no fbp/fbc/client_ip — firing anyway with UA only",
+            event_name,
+        )
 
     user_data: dict = {
         "client_user_agent": user_agent or "Mozilla/5.0 (compatible; NafaasCAPI/1.0)",
