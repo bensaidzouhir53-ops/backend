@@ -51,7 +51,7 @@ def _build_event_data(order: Order, settings) -> dict:
         user["ttclid"] = ttclid
 
     return {
-        # Match browser pixel (tracking.ts safeTtq('PlaceAnOrder')) for deduplication.
+        # One server-side purchase per order — browser pixel does not fire this event.
         "event": "PlaceAnOrder",
         "event_time": int(datetime.now(tz=timezone.utc).timestamp()),
         "event_id": order.event_id or str(uuid.uuid4()),
