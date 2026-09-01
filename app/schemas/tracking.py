@@ -37,3 +37,5 @@ class PublicTrackingConfigResponse(BaseModel):
     snap_pixel_id: Optional[str] = None
     # When true, Meta Purchase is sent server-side (CAPI) only — browser must not duplicate it.
     capi_enabled: bool = False
+    # When true, TikTok PlaceAnOrder is sent server-side only — browser must not duplicate it.
+    tiktok_capi_enabled: bool = False
