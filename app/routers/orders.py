@@ -146,6 +146,15 @@ async def _fire_capi_and_store(
             )
             return
 
+    # Row lock prevents concurrent upsell/order hooks from double-firing CAPI.
+    locked = await db.execute(
+        select(Order).where(Order.id == order.id).with_for_update()
+    )
+    order = locked.scalar_one_or_none()
+    if not order:
+        logger.error("CAPI skipped — order not found after lock")
+        return
+
     existing = await db.execute(
         select(TrackingEvent).where(
             TrackingEvent.order_id == order.id,
@@ -493,11 +502,10 @@ async def _fire_post_upsell_hooks(order_id: uuid.UUID) -> None:
             results = await asyncio.gather(
                 sheet_webhook.send_upsell_accepted(db, order),
                 cod_network.send_upsell_accepted(db, order),
-                _fire_capi_and_store(db, order, "Purchase"),
                 return_exceptions=True,
             )
             for label, result in zip(
-                ("sheet_webhook", "cod_network", "capi"),
+                ("sheet_webhook", "cod_network"),
                 results,
                 strict=True,
             ):
