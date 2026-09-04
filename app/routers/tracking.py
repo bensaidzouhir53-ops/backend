@@ -57,11 +57,6 @@ async def get_tracking_config() -> PublicTrackingConfigResponse:
         or settings.SNAP_PIXEL_ID
     )
     enabled = settings.ENABLE_WEB_PIXELS and has_any_pixel
-    tiktok_ready = (
-        settings.ENABLE_CAPI
-        and is_real_secret(settings.TIKTOK_PIXEL_CODE)
-        and is_real_secret(settings.TIKTOK_ACCESS_TOKEN)
-    )
     return PublicTrackingConfigResponse(
         enabled=enabled,
         meta_pixel_id=meta_ids[0] if meta_ids else None,
@@ -73,7 +68,7 @@ async def get_tracking_config() -> PublicTrackingConfigResponse:
             else None
         ),
         capi_enabled=settings.ENABLE_CAPI and len(settings.meta_pixel_token_pairs) > 0,
-        tiktok_capi_enabled=tiktok_ready,
+        tiktok_capi_enabled=False,
     )
 
 

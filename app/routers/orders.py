@@ -29,7 +29,6 @@ from app.services.order_processing import should_process_order
 from app.services.phone_whitelist import is_whitelisted_phone
 from app.services.phone_blacklist import is_blacklisted_phone
 from app.services.capi import meta as meta_capi
-from app.services.capi import tiktok as tiktok_capi
 from app.services.capi import snapchat as snap_capi
 from app.services.capi.status import provider_status
 
@@ -197,15 +196,14 @@ async def _fire_capi_and_store(
             "snapchat": {"skipped": "test order — no Snapchat test-event isolation"},
         }
     else:
-        meta_result, tiktok_result, snap_result = await asyncio.gather(
+        meta_result, snap_result = await asyncio.gather(
             meta_capi.fire_purchase_event(order),
-            tiktok_capi.fire_purchase_event(order),
             snap_capi.fire_purchase_event(order),
             return_exceptions=True,
         )
         provider_results = {
             "meta": _safe(meta_result),
-            "tiktok": _safe(tiktok_result),
+            "tiktok": {"skipped": "browser pixel only — TikTok CAPI disabled"},
             "snapchat": _safe(snap_result),
         }
 
