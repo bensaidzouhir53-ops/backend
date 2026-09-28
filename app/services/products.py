@@ -3,7 +3,7 @@
 PRODUCT_CATALOG: dict[str, dict[str, str]] = {
     "herbal-lung-spray": {
         "name_ar": "بخاخ تنظيف الرئتين العشبي لتنفس مريح",
-        "sku": "HBLEANSPRY3",
+        "sku": "HBLEANSPRY44",
     },
     "molien-drops": {
         "name_ar": "كحة، بلغم، وكتمة؟ قطرات مستخلص المولين تنظّف رئتك من جوّا وتطرد بلغم السنين!",

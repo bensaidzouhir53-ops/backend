@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     COD_NETWORK_API_VERSION: str = "v2"
     COD_NETWORK_MODE: str = "lead"  # lead = call center confirms | order = ship direct
     # Quick single-SKU setup (used when COD_NETWORK_PRODUCT_MAP has no entry for a slug):
-    COD_NETWORK_SKU: Optional[str] = "HBLEANSPRY3"
+    COD_NETWORK_SKU: Optional[str] = "HBLEANSPRY44"
     COD_NETWORK_PRODUCT_NAME: Optional[str] = "Herbal lung cleansing spray"
     # Aliases (same as above — either name works in Easypanel):
     COD_NETWORK_DROP_PRODUCT_SKU: Optional[str] = None
@@ -110,6 +110,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _normalize_cod_network_env(self) -> "Settings":
+        if self.COD_NETWORK_API_TOKEN:
+            self.COD_NETWORK_API_TOKEN = self.COD_NETWORK_API_TOKEN.strip()
         if self.COD_NETWORK_SKU and not self.COD_NETWORK_DROP_PRODUCT_SKU:
             self.COD_NETWORK_DROP_PRODUCT_SKU = self.COD_NETWORK_SKU.strip()
         if self.COD_NETWORK_PRODUCT_NAME and not self.COD_NETWORK_DROP_PRODUCT_NAME:

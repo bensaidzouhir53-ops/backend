@@ -387,17 +387,6 @@ async def send_order_to_cod_network(
         resp = await _post_payload(payload, settings.COD_NETWORK_MODE)
         parsed = _parse_response_body(resp.text)
 
-        # Some seller SKUs reject the items array — retry with sku_1 fields only.
-        if resp.status_code >= 400 and _is_items_not_found_error(parsed):
-            fallback_payload = {k: v for k, v in payload.items() if k != "items"}
-            logger.warning(
-                "COD Network items rejected for %s (sku=%s), retrying without items array",
-                order.order_number,
-                payload.get("sku_1"),
-            )
-            resp = await _post_payload(fallback_payload, settings.COD_NETWORK_MODE)
-            parsed = _parse_response_body(resp.text)
-
         result = {
             "status_code": resp.status_code,
             "body": resp.text[:2000],
@@ -407,12 +396,21 @@ async def send_order_to_cod_network(
             "skus_sent": [item.get("sku") for item in payload.get("items", [])],
         }
         if resp.status_code >= 400:
-            logger.error(
-                "COD Network rejected order %s: HTTP %s — %s",
-                order.order_number,
-                resp.status_code,
-                resp.text[:500],
-            )
+            if _is_items_not_found_error(parsed):
+                logger.error(
+                    "COD Network rejected order %s: SKU %s is not enabled on your COD "
+                    "seller account (41030). Update COD_NETWORK_PRODUCT_MAP / "
+                    "COD_NETWORK_SKU in Easypanel to a SKU from GET /api/v2/seller/products.",
+                    order.order_number,
+                    payload.get("sku_1"),
+                )
+            else:
+                logger.error(
+                    "COD Network rejected order %s: HTTP %s — %s",
+                    order.order_number,
+                    resp.status_code,
+                    resp.text[:500],
+                )
         else:
             logger.info(
                 "COD Network %s for order %s: HTTP %s ref=%s sku=%s",
