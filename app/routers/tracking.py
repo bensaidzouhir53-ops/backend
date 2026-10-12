@@ -120,7 +120,6 @@ async def fire_meta_test_event(request: Request) -> dict:
             "status": provider_status(settings),
         }
 
-    pixel_id, token = pairs[0]
     phone_hash = hashlib.sha256(b"966500000000").hexdigest()
     event = {
         "event_name": "Purchase",
@@ -142,38 +141,58 @@ async def fire_meta_test_event(request: Request) -> dict:
             "order_id": f"meta-test-{int(time.time())}",
         },
     }
-    payload: dict = {"data": [event], "access_token": token}
-    if test_code and is_real_secret(test_code):
-        payload["test_event_code"] = test_code
 
-    url = f"https://graph.facebook.com/v22.0/{pixel_id}/events"
+    results = []
+    ok_any = False
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(url, json=payload)
-            data = resp.json()
+            for pixel_id, token in pairs:
+                payload: dict = {"data": [event], "access_token": token}
+                if test_code and is_real_secret(test_code):
+                    payload["test_event_code"] = test_code
+                url = f"https://graph.facebook.com/v22.0/{pixel_id}/events"
+                try:
+                    resp = await client.post(url, json=payload)
+                    data = resp.json()
+                except Exception as exc:
+                    logger.error("Meta test event failed for pixel %s: %s", pixel_id[:6], exc)
+                    results.append({
+                        "ok": False,
+                        "error": str(exc),
+                        "pixel_preview": pixel_id[:6] + "…",
+                    })
+                    continue
+                ok = resp.status_code < 400 and not (
+                    isinstance(data, dict) and data.get("error")
+                )
+                ok_any = ok_any or ok
+                logger.info(
+                    "Meta test event pixel=%s status=%s test_code=%s response=%s",
+                    pixel_id[:6],
+                    resp.status_code,
+                    bool(test_code),
+                    data,
+                )
+                results.append({
+                    "ok": ok,
+                    "status_code": resp.status_code,
+                    "pixel_preview": pixel_id[:6] + "…",
+                    "response": data,
+                })
     except Exception as exc:
         logger.error("Meta test event failed: %s", exc)
-        return {"ok": False, "error": str(exc), "pixel_preview": pixel_id[:6] + "…"}
+        return {"ok": False, "error": str(exc)}
 
-    ok = resp.status_code < 400 and not (isinstance(data, dict) and data.get("error"))
-    logger.info(
-        "Meta test event pixel=%s status=%s test_code=%s response=%s",
-        pixel_id[:6],
-        resp.status_code,
-        bool(test_code),
-        data,
-    )
     return {
-        "ok": ok,
-        "status_code": resp.status_code,
-        "pixel_preview": pixel_id[:6] + "…",
+        "ok": ok_any,
+        "pixels_fired": len(results),
+        "results": results,
         "test_event_code_used": bool(test_code and is_real_secret(test_code)),
         "hint": (
             None
             if test_code
             else "Pass test_event_code or set META_TEST_EVENT_CODE to see this in Test Events tab"
         ),
-        "response": data,
     }
 
 

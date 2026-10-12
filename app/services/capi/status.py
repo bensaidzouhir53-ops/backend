@@ -37,6 +37,8 @@ def is_real_secret(value: str | None) -> bool:
         return False
     if cleaned.startswith("your_"):
         return False
+    if cleaned.startswith("replace_with"):
+        return False
     return True
 
 
@@ -62,7 +64,7 @@ def provider_status(settings: Settings) -> dict:
     token_clean = _clean(settings.META_ACCESS_TOKEN)
     meta_info = {
         "pixel_preview": pid_clean[:6] + "…" if len(pid_clean) > 6 else pid_clean or None,
-        "pixel_set": is_real_secret(pid_clean),
+        "pixel_set": is_real_secret(pid_clean) or bool(settings.meta_pixel_ids),
         "token_set": is_real_secret(token_clean),
         "ready": len(pixel_token_pairs) > 0,
     }
@@ -71,6 +73,9 @@ def provider_status(settings: Settings) -> dict:
         "enable_capi": settings.ENABLE_CAPI,
         "meta": {
             "pixels_configured": len(pixel_token_pairs),
+            "browser_pixel_ids": [
+                pid[:6] + "…" if len(pid) > 6 else pid for pid in settings.meta_pixel_ids
+            ],
             "ready": len(pixel_token_pairs) > 0,
             "test_event_code_set": is_real_secret(settings.META_TEST_EVENT_CODE),
             "test_event_hint": (

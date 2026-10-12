@@ -7,8 +7,9 @@ from typing import Optional
 
 from app.database_url import normalize_database_url
 
-# Single Meta pixel for browser + CAPI (AddToCart, InitiateCheckout, Purchase in Ads Manager).
+# Primary Meta pixel (CAPI + browser). Extra IDs are browser-only unless they have their own token.
 CANONICAL_META_PIXEL_ID = "576636091443534"
+EXTRA_BROWSER_META_PIXEL_IDS = ("2303667077124032",)
 
 
 class Settings(BaseSettings):
@@ -59,6 +60,15 @@ class Settings(BaseSettings):
 
     META_PIXEL_ID: Optional[str] = None
     META_ACCESS_TOKEN: Optional[str] = None
+    # Extra Meta pixels — browser IDs (CAPI only if META_ACCESS_TOKEN_N is set)
+    META_PIXEL_ID_2: Optional[str] = None
+    META_ACCESS_TOKEN_2: Optional[str] = None
+    META_PIXEL_ID_3: Optional[str] = None
+    META_ACCESS_TOKEN_3: Optional[str] = None
+    META_PIXEL_ID_4: Optional[str] = None
+    META_ACCESS_TOKEN_4: Optional[str] = None
+    META_PIXEL_ID_5: Optional[str] = None
+    META_ACCESS_TOKEN_5: Optional[str] = None
     # Common Easypanel copy-paste aliases — mapped to META_ACCESS_TOKEN if primary is empty
     META_API_TOKEN: Optional[str] = None
     FACEBOOK_ACCESS_TOKEN: Optional[str] = None
@@ -88,6 +98,14 @@ class Settings(BaseSettings):
         for name in (
             "META_PIXEL_ID",
             "META_ACCESS_TOKEN",
+            "META_PIXEL_ID_2",
+            "META_ACCESS_TOKEN_2",
+            "META_PIXEL_ID_3",
+            "META_ACCESS_TOKEN_3",
+            "META_PIXEL_ID_4",
+            "META_ACCESS_TOKEN_4",
+            "META_PIXEL_ID_5",
+            "META_ACCESS_TOKEN_5",
             "META_API_TOKEN",
             "FACEBOOK_ACCESS_TOKEN",
             "META_TEST_EVENT_CODE",
@@ -258,27 +276,44 @@ class Settings(BaseSettings):
             return cleaned
         return self.cod_network_sku_aliases_parsed.get(cleaned.upper(), cleaned)
 
+    def _meta_pixel_slots(self) -> list[tuple[str, str | None]]:
+        """(pixel_id, access_token) slots from env. Empty IDs are skipped."""
+        primary_id = (self.META_PIXEL_ID or "").strip() or CANONICAL_META_PIXEL_ID
+        return [
+            (primary_id, self.META_ACCESS_TOKEN),
+            ((self.META_PIXEL_ID_2 or "").strip(), self.META_ACCESS_TOKEN_2),
+            ((self.META_PIXEL_ID_3 or "").strip(), self.META_ACCESS_TOKEN_3),
+            ((self.META_PIXEL_ID_4 or "").strip(), self.META_ACCESS_TOKEN_4),
+            ((self.META_PIXEL_ID_5 or "").strip(), self.META_ACCESS_TOKEN_5),
+        ]
+
     @property
     def meta_pixel_ids(self) -> list[str]:
-        """Meta browser pixel ID — always the canonical pixel when CAPI/token is configured."""
-        if not self.META_ACCESS_TOKEN:
-            env_id = (self.META_PIXEL_ID or "").strip()
-            if env_id:
-                return [CANONICAL_META_PIXEL_ID]
-            return []
-        return [CANONICAL_META_PIXEL_ID]
+        """Meta browser pixel IDs: existing pixel + extra ID-only pixels."""
+        ids: list[str] = []
+        for pixel_id, _token in self._meta_pixel_slots():
+            if pixel_id and pixel_id not in ids:
+                ids.append(pixel_id)
+        for extra in EXTRA_BROWSER_META_PIXEL_IDS:
+            if extra and extra not in ids:
+                ids.append(extra)
+        return ids
 
     @property
     def meta_pixel_token_pairs(self) -> list[tuple[str, str]]:
-        """Meta pixel/token pair for CAPI (single canonical pixel)."""
+        """CAPI only for pixels that have their own access token. Extra IDs stay browser-only."""
         from app.services.capi.status import is_real_secret
 
-        if not self.META_ACCESS_TOKEN:
-            return []
-        token_clean = self.META_ACCESS_TOKEN.strip()
-        if token_clean and is_real_secret(token_clean):
-            return [(CANONICAL_META_PIXEL_ID, token_clean)]
-        return []
+        pairs: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for pixel_id, token in self._meta_pixel_slots():
+            if not pixel_id or pixel_id in seen:
+                continue
+            chosen = (token or "").strip()
+            if chosen and is_real_secret(chosen):
+                pairs.append((pixel_id, chosen))
+                seen.add(pixel_id)
+        return pairs
 
     @property
     def cors_origins_list(self) -> list[str]:
