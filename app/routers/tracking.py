@@ -14,6 +14,7 @@ from app.schemas.tracking import (
     TrackingEventResponse,
 )
 from app.services.capi import meta as meta_capi
+from app.services.capi import snapchat as snap_capi
 from app.services.capi.status import is_real_secret, provider_status
 from app.services.cod_network.status import cod_network_status
 
@@ -196,6 +197,86 @@ async def fire_meta_test_event(request: Request) -> dict:
     }
 
 
+@router.post("/tracking/snap-test")
+async def fire_snap_test_event(request: Request) -> dict:
+    """
+    Fire one test PURCHASE to Snapchat CAPI validate endpoint.
+    Shows in Events Manager → Test events without counting as a real conversion.
+    """
+    import time
+
+    import httpx
+
+    settings = get_settings()
+    pixel_id = (settings.SNAP_PIXEL_ID or "").strip()
+    token = (settings.SNAP_ACCESS_TOKEN or "").strip()
+    if not is_real_secret(pixel_id) or not is_real_secret(token):
+        return {
+            "ok": False,
+            "error": "SNAP_PIXEL_ID or SNAP_ACCESS_TOKEN missing/invalid in backend env",
+            "status": provider_status(settings),
+        }
+
+    event_id = str(uuid.uuid4())
+    payload = {
+        "data": [
+            {
+                "event_name": "PURCHASE",
+                "event_time": int(time.time()),
+                "event_id": event_id,
+                "action_source": "WEB",
+                "event_source_url": settings.FRONTEND_URL or "https://nafaas.shop/",
+                "user_data": {
+                    "ph": [
+                        "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92"
+                    ],
+                    "client_ip_address": _get_client_ip(request, None) or "8.8.8.8",
+                    "client_user_agent": request.headers.get("User-Agent")
+                    or "Mozilla/5.0 (compatible; NafaasSnapTest/1.0)",
+                },
+                "custom_data": {
+                    "value": 1.0,
+                    "currency": "SAR",
+                    "order_id": f"snap-test-{int(time.time())}",
+                    "content_ids": ["snap-test"],
+                    "content_type": "product",
+                },
+            }
+        ]
+    }
+
+    url = f"https://tr.snapchat.com/v3/{pixel_id}/events/validate"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                url,
+                params={"access_token": token},
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            data = resp.json()
+    except Exception as exc:
+        logger.error("Snap test event failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
+    status_text = str(data.get("status") or "").upper() if isinstance(data, dict) else ""
+    ok = resp.status_code < 400 and status_text in {"", "VALID", "SUCCESS"}
+    logger.info(
+        "Snap test event pixel=%s status=%s response=%s",
+        pixel_id[:8],
+        resp.status_code,
+        data,
+    )
+    return {
+        "ok": ok,
+        "status_code": resp.status_code,
+        "pixel_preview": pixel_id[:8] + "…",
+        "event_id": event_id,
+        "response": data,
+        "hint": "Open Snap Ads Manager → Events Manager → Test events to see this PURCHASE",
+    }
+
+
 @router.get("/tracking/cod-network-status")
 async def get_cod_network_status() -> dict:
     """Debug endpoint: verify COD Network env is loaded (no API token returned)."""
@@ -203,15 +284,15 @@ async def get_cod_network_status() -> dict:
     return cod_network_status(settings)
 
 
-async def _forward_event_to_meta_capi(
+async def _forward_event_to_capi(
     event_name: str,
     body: TrackingEventRequest,
     client_ip: str | None,
 ) -> None:
-    """Fire-and-forget: send AddToCart/InitiateCheckout to Meta CAPI. Never raises."""
+    """Fire-and-forget: send AddToCart/InitiateCheckout to Meta + Snap CAPI."""
+    cookies = body.cookies or {}
+    click_ids = body.click_ids or {}
     try:
-        cookies = body.cookies or {}
-        click_ids = body.click_ids or {}
         result = await meta_capi.fire_browser_event(
             event_name,
             event_id=body.event_id,
@@ -228,6 +309,23 @@ async def _forward_event_to_meta_capi(
         logger.info("Meta CAPI %s forwarded: %s", event_name, result)
     except Exception as exc:
         logger.error("Meta CAPI %s forward failed: %s", event_name, exc)
+
+    try:
+        result = await snap_capi.fire_browser_event(
+            event_name,
+            event_id=body.event_id,
+            value=body.value,
+            currency=body.currency or "SAR",
+            content_ids=body.content_ids or [],
+            event_source_url=body.page_url,
+            sc_click_id=click_ids.get("sc_click_id") or click_ids.get("ScCid"),
+            scid=cookies.get("scid") or cookies.get("_scid"),
+            client_ip=client_ip,
+            user_agent=body.user_agent,
+        )
+        logger.info("Snapchat CAPI %s forwarded: %s", event_name, result)
+    except Exception as exc:
+        logger.error("Snapchat CAPI %s forward failed: %s", event_name, exc)
 
 
 @router.post(
@@ -279,7 +377,7 @@ async def capture_tracking_event(
     settings = get_settings()
     if settings.ENABLE_CAPI and event_name in _CAPI_FORWARDED_EVENTS:
         background_tasks.add_task(
-            _forward_event_to_meta_capi, event_name, body, client_ip
+            _forward_event_to_capi, event_name, body, client_ip
         )
 
     return TrackingEventResponse(stored=True)

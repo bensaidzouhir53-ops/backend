@@ -10,6 +10,7 @@ from app.database_url import normalize_database_url
 # Primary Meta pixel (CAPI + browser). Extra IDs are browser-only unless they have their own token.
 CANONICAL_META_PIXEL_ID = "576636091443534"
 EXTRA_BROWSER_META_PIXEL_IDS = ("2303667077124032",)
+CANONICAL_SNAP_PIXEL_ID = "700c360f-b027-411e-8fbd-47ff5e4e91b7"
 
 
 class Settings(BaseSettings):
@@ -81,6 +82,11 @@ class Settings(BaseSettings):
 
     SNAP_PIXEL_ID: Optional[str] = None
     SNAP_ACCESS_TOKEN: Optional[str] = None
+    # Common Easypanel / Ads Manager copy-paste aliases
+    SNAPCHAT_PIXEL_ID: Optional[str] = None
+    SNAPCHAT_ACCESS_TOKEN: Optional[str] = None
+    SNAP_CAPI_TOKEN: Optional[str] = None
+    SNAP_TOKEN: Optional[str] = None
 
     ENABLE_CAPI: bool = True
     ENABLE_WEB_PIXELS: bool = True
@@ -114,6 +120,10 @@ class Settings(BaseSettings):
             "TIKTOK_ACCESS_TOKEN",
             "SNAP_PIXEL_ID",
             "SNAP_ACCESS_TOKEN",
+            "SNAPCHAT_PIXEL_ID",
+            "SNAPCHAT_ACCESS_TOKEN",
+            "SNAP_CAPI_TOKEN",
+            "SNAP_TOKEN",
         ):
             setattr(self, name, _strip(getattr(self, name)))
 
@@ -123,6 +133,15 @@ class Settings(BaseSettings):
         # TIKTOK_PIXEL_ID is an alias for TIKTOK_PIXEL_CODE
         if self.TIKTOK_PIXEL_ID:
             self.TIKTOK_PIXEL_CODE = self.TIKTOK_PIXEL_ID
+
+        if not self.SNAP_PIXEL_ID:
+            self.SNAP_PIXEL_ID = self.SNAPCHAT_PIXEL_ID or CANONICAL_SNAP_PIXEL_ID
+        if not self.SNAP_ACCESS_TOKEN:
+            self.SNAP_ACCESS_TOKEN = (
+                self.SNAPCHAT_ACCESS_TOKEN
+                or self.SNAP_CAPI_TOKEN
+                or self.SNAP_TOKEN
+            )
 
         return self
 

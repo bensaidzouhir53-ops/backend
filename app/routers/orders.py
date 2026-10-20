@@ -30,7 +30,7 @@ from app.services.phone_whitelist import is_whitelisted_phone
 from app.services.phone_blacklist import is_blacklisted_phone
 from app.services.capi import meta as meta_capi
 from app.services.capi import snapchat as snap_capi
-from app.services.capi.status import provider_status
+from app.services.capi.status import is_real_secret, provider_status
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["orders"])
@@ -186,14 +186,28 @@ async def _fire_capi_and_store(
         return r
 
     if test_mode:
-        (meta_result,) = await asyncio.gather(
-            meta_capi.fire_purchase_event(order),
-            return_exceptions=True,
+        include_meta = (
+            is_real_secret(settings.META_TEST_EVENT_CODE)
+            or settings.APP_ENV != "production"
         )
+        if include_meta:
+            meta_result, snap_result = await asyncio.gather(
+                meta_capi.fire_purchase_event(order),
+                snap_capi.fire_purchase_event(order, test_mode=True),
+                return_exceptions=True,
+            )
+        else:
+            (snap_result,) = await asyncio.gather(
+                snap_capi.fire_purchase_event(order, test_mode=True),
+                return_exceptions=True,
+            )
+            meta_result = {
+                "skipped": "production test order — set META_TEST_EVENT_CODE"
+            }
         provider_results = {
             "meta": _safe(meta_result),
             "tiktok": {"skipped": "test order — no TikTok test-event isolation"},
-            "snapchat": {"skipped": "test order — no Snapchat test-event isolation"},
+            "snapchat": _safe(snap_result),
         }
     else:
         meta_result, snap_result = await asyncio.gather(
@@ -229,16 +243,8 @@ async def _fire_capi_and_store(
 
 
 async def _fire_capi_only(order_id: uuid.UUID) -> None:
-    """Fire Meta-only CAPI for test orders (no COD/sheet/WhatsApp). Never raises."""
+    """Fire CAPI for test orders (Snap validate + Meta test events). Never raises."""
     from app.database import AsyncSessionLocal
-
-    settings = get_settings()
-    if settings.APP_ENV == "production" and not settings.META_TEST_EVENT_CODE:
-        logger.info(
-            "CAPI-only hook skipped for test order_id=%s in production (no META_TEST_EVENT_CODE)",
-            order_id,
-        )
-        return
 
     logger.info("CAPI-only hook started for test order_id=%s", order_id)
     try:
