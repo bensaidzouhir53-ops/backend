@@ -10,6 +10,7 @@ from app.database_url import normalize_database_url
 # Primary Meta pixel (CAPI + browser). Extra IDs are browser-only unless they have their own token.
 CANONICAL_META_PIXEL_ID = "576636091443534"
 EXTRA_BROWSER_META_PIXEL_IDS = ("1435851508750967",)
+DROPPED_BROWSER_META_PIXEL_IDS = frozenset({"2303667077124032"})
 CANONICAL_SNAP_PIXEL_ID = "700c360f-b027-411e-8fbd-47ff5e4e91b7"
 
 
@@ -311,7 +312,11 @@ class Settings(BaseSettings):
         """Meta browser pixel IDs: existing pixel + extra ID-only pixels."""
         ids: list[str] = []
         for pixel_id, _token in self._meta_pixel_slots():
-            if pixel_id and pixel_id not in ids:
+            if (
+                pixel_id
+                and pixel_id not in ids
+                and pixel_id not in DROPPED_BROWSER_META_PIXEL_IDS
+            ):
                 ids.append(pixel_id)
         for extra in EXTRA_BROWSER_META_PIXEL_IDS:
             if extra and extra not in ids:
