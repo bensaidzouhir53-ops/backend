@@ -9,7 +9,7 @@ from app.database_url import normalize_database_url
 
 # Primary Meta pixel (CAPI + browser). Extra IDs are browser-only unless they have their own token.
 CANONICAL_META_PIXEL_ID = "576636091443534"
-EXTRA_BROWSER_META_PIXEL_IDS = ("2303667077124032",)
+EXTRA_BROWSER_META_PIXEL_IDS = ("2303667077124032", "1435851508750967")
 CANONICAL_SNAP_PIXEL_ID = "700c360f-b027-411e-8fbd-47ff5e4e91b7"
 
 
