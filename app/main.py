@@ -10,7 +10,8 @@ from app.database_migrations import ensure_order_schema
 from app.routers import admin, health, orders, redirectmonster, tracking
 from app.services import sheet_webhook
 from app.services.capi.status import provider_status
-from app.services.cod_network.status import cod_network_status
+from app.services.cod_network.status import cod_network_status, probe_cod_network_token
+from app.services import cod_network
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,8 +42,11 @@ async def lifespan(app: FastAPI):
         cod["default_sku"],
         cod["token_set"],
     )
+    await probe_cod_network_token(settings)
     asyncio.create_task(sheet_webhook.sync_pending_orders_on_startup())
-    # COD Network auto-resync intentionally disabled: an order is pushed once,
+    if cod["enable_cod_network"] and cod["token_set"]:
+        asyncio.create_task(cod_network.sync_pending_orders_on_startup())
+    # COD Network periodic auto-resync intentionally disabled: an order is pushed once,
     # right when it's created (see orders.py _fire_post_order_hooks). Blindly
     # re-scanning and re-POSTing every order missing cod_network_sent_at on
     # every restart + every 5 minutes caused duplicate leads whenever a send

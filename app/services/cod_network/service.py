@@ -396,7 +396,14 @@ async def send_order_to_cod_network(
             "skus_sent": [item.get("sku") for item in payload.get("items", [])],
         }
         if resp.status_code >= 400:
-            if _is_items_not_found_error(parsed):
+            if resp.status_code == 401:
+                logger.error(
+                    "COD Network rejected order %s: HTTP 401 — API token invalid or "
+                    "expired. Update COD_NETWORK_API_TOKEN in Easypanel and restart "
+                    "backend, then resync failed orders from admin.",
+                    order.order_number,
+                )
+            elif _is_items_not_found_error(parsed):
                 logger.error(
                     "COD Network rejected order %s: SKU %s is not enabled on your COD "
                     "seller account (41030). Update COD_NETWORK_PRODUCT_MAP / "
